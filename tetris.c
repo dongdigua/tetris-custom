@@ -225,10 +225,12 @@ main(int argc, char *argv[])
 		}
 	}
 
+#if !SMALL
 	snprintf(key_msg, sizeof key_msg,
 "%s - left   %s - ccw  %s - cw   %s - right   %s - drop   %s - pause   %s - quit",
 		key_write[0], key_write[1], key_write[2], key_write[3],
 		key_write[4], key_write[5], key_write[6]);
+#endif
 
 	(void)signal(SIGINT, onintr);
 	scr_init();

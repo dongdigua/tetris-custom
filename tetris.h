@@ -71,7 +71,13 @@ extern cell	board[B_SIZE];	/* 1 => occupied, 0 => empty */
  * Minimum display size.
  */
 #define	MINROWS	23
+
+#define SMALL 1
+#if SMALL
+#define	MINCOLS	20
+#else
 #define	MINCOLS	40
+#endif
 
 extern int	Rows, Cols;	/* current screen size */
 
