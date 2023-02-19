@@ -270,13 +270,13 @@ scr_set(void)
 	if (Rows == 0)
 		Rows = LInum;
 	if (Cols == 0)
-	Cols = COnum;
+        Cols = COnum;
 	if (Rows < MINROWS || Cols < MINCOLS) {
-		char smallscr[55];
+		char smallscr[55]; /* TODO: why 55, will this cause memory issue? */
 
 		(void)snprintf(smallscr, sizeof(smallscr),
-		    "the screen is too small (must be at least %dx%d)",
-		    MINROWS, MINCOLS);
+		    "the screen is too small (%dx%d) must be at least %dx%d",
+                       Rows, Cols, MINROWS, MINCOLS);
 		stop(smallscr);
 	}
 	if (tcgetattr(0, &oldtt) == -1)
