@@ -150,7 +150,7 @@ randshape(void)
 int
 main(int argc, char *argv[])
 {
-	int pos, c;
+	int pos, c, pos_r;
 	char *keys;
 	int level = 2, ret;
 	char key_write[NUMKEYS][10];
@@ -252,9 +252,20 @@ main(int argc, char *argv[])
 	scr_msg(key_msg, 1);
 
 	for (;;) {
+		pos_r = pos;
+
+		while (fits_in(curshape, pos_r + B_COLS)) {
+			/* need to place ghost brick first */
+			pos_r += B_COLS;
+		}
+		place(curshape, pos_r, 2);
 		place(curshape, pos, 1);
+
 		scr_update();
+
+		place(curshape, pos_r, 0);
 		place(curshape, pos, 0);
+
 		c = tgetchar();
 		if (c < 0) {
 			/*

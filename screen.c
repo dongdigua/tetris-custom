@@ -270,7 +270,7 @@ scr_set(void)
 	if (Rows == 0)
 		Rows = LInum;
 	if (Cols == 0)
-        Cols = COnum;
+		Cols = COnum;
 	if (Rows < MINROWS || Cols < MINCOLS) {
 		char smallscr[55]; /* TODO: why 55, will this cause memory issue? */
 
@@ -442,7 +442,10 @@ scr_update(void)
 					putpad(so ? SOstr : SEstr);
 					cur_so = so;
 				}
-				putstr("  ");
+				if (so > 1) {
+					putstr("[]");
+				} else
+					putstr("  ");
 			} else
 				putstr(so ? "[]" : "  ");
 			ccol = i + 1;
