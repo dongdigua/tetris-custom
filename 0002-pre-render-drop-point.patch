@@ -1,0 +1,63 @@
+From 79110eef265a839985aa34375f66f475eea63e93 Mon Sep 17 00:00:00 2001
+From: dongdigua <dongdigua@outlook.com>
+Date: Fri, 24 Feb 2023 17:23:43 +0800
+Subject: [PATCH] pre-render drop point
+
+Two hours of work to get less than 20 lines of diff!
+Hacking is really a good chance to understand the code!
+---
+ screen.c   |  5 +++++--
+ tetris.c   | 13 ++++++++++++-
+ 3 files changed, 18 insertions(+), 4 deletions(-)
+
+diff --git a/screen.c b/screen.c
+index 633bb4e..f9b15db 100644
+--- a/screen.c
++++ b/screen.c
+@@ -442,7 +442,10 @@ scr_update(void)
+ 					putpad(so ? SOstr : SEstr);
+ 					cur_so = so;
+ 				}
+-				putstr("  ");
++				if (so > 1) {
++					putstr("[]");
++				} else
++					putstr("  ");
+ 			} else
+ 				putstr(so ? "[]" : "  ");
+ 			ccol = i + 1;
+diff --git a/tetris.c b/tetris.c
+index d08e9e0..45f27f8 100644
+--- a/tetris.c
++++ b/tetris.c
+@@ -150,7 +150,7 @@ randshape(void)
+ int
+ main(int argc, char *argv[])
+ {
+-	int pos, c;
++	int pos, c, pos_r;
+ 	char *keys;
+ 	int level = 2, ret;
+ 	char key_write[NUMKEYS][10];
+@@ -252,9 +252,20 @@ main(int argc, char *argv[])
+ 	scr_msg(key_msg, 1);
+ 
+ 	for (;;) {
++		pos_r = pos;
++
++		while (fits_in(curshape, pos_r + B_COLS)) {
++			/* need to place ghost brick first */
++			pos_r += B_COLS;
++		}
++		place(curshape, pos_r, 2);
+ 		place(curshape, pos, 1);
++
+ 		scr_update();
++
++		place(curshape, pos_r, 0);
+ 		place(curshape, pos, 0);
++
+ 		c = tgetchar();
+ 		if (c < 0) {
+ 			/*
+
