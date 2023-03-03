@@ -225,7 +225,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-#if !SMALL
+#ifndef SMALL_TERM
 	snprintf(key_msg, sizeof key_msg,
 "%s - left   %s - ccw  %s - cw   %s - right   %s - drop   %s - pause   %s - quit",
 		key_write[0], key_write[1], key_write[2], key_write[3],

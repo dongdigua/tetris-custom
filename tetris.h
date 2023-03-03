@@ -70,12 +70,11 @@ extern cell	board[B_SIZE];	/* 1 => occupied, 0 => empty */
 /*
  * Minimum display size.
  */
-#define	MINROWS	23
-
-#define SMALL 1
-#if SMALL
+#ifdef SMALL_TERM
+#define	MINROWS	21
 #define	MINCOLS	20
 #else
+#define	MINROWS	23
 #define	MINCOLS	40
 #endif
 
