@@ -1,5 +1,4 @@
-/*	$OpenBSD: input.h,v 1.6 2017/08/13 02:12:16 tedu Exp $	*/
-/*	$NetBSD: input.h,v 1.2 1995/04/22 07:42:36 cgd Exp $	*/
+/*	$NetBSD: input.h,v 1.5 2004/01/27 20:30:30 jsm Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -35,6 +34,6 @@
  *	@(#)input.h	8.1 (Berkeley) 5/31/93
  */
 
-int	rwait(struct timespec *);
+int	rwait(struct timeval *);
 int	tgetchar(void);
 void	tsleep(void);

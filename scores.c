@@ -1,5 +1,4 @@
-/*	$OpenBSD: scores.c,v 1.25 2019/06/28 13:32:52 deraadt Exp $	*/
-/*	$NetBSD: scores.c,v 1.2 1995/04/22 07:42:38 cgd Exp $	*/
+/*	$NetBSD: scores.c,v 1.13 2004/01/27 20:30:30 jsm Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -45,16 +44,19 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <term.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <time.h>
+#include <termcap.h>
 #include <unistd.h>
 
-#include "scores.h"
+#include "pathnames.h"
 #include "screen.h"
+#include "scores.h"
 #include "tetris.h"
 
 /*
@@ -89,41 +91,53 @@ static char *thisuser(void);
  * Note, we assume closing the stdio file releases the lock.
  */
 static void
-getscores(FILE **fpp)
+getscores(fpp)
+	FILE **fpp;
 {
-	int sd, mint, i;
-	char *mstr, *human;
+	int sd, mint, lck;
+	mode_t mask;
+	const char *mstr, *human;
 	FILE *sf;
 
 	if (fpp != NULL) {
 		mint = O_RDWR | O_CREAT;
 		mstr = "r+";
 		human = "read/write";
-		*fpp = NULL;
+		lck = LOCK_EX;
 	} else {
 		mint = O_RDONLY;
 		mstr = "r";
 		human = "reading";
+		lck = LOCK_SH;
 	}
-
-	sd = open(scorepath, mint, 0666);
-	if (sd == -1) {
+	setegid(egid);
+	mask = umask(S_IWOTH);
+	sd = open(_PATH_SCOREFILE, mint, 0666);
+	(void)umask(mask);
+	if (sd < 0) {
 		if (fpp == NULL) {
 			nscores = 0;
+			setegid(gid);
 			return;
 		}
-		err(1, "cannot open %s for %s", scorepath, human);
+		err(1, "cannot open %s for %s", _PATH_SCOREFILE, human);
 	}
-	if ((sf = fdopen(sd, mstr)) == NULL)
-		err(1, "cannot fdopen %s for %s", scorepath, human);
+	if ((sf = fdopen(sd, mstr)) == NULL) {
+		err(1, "cannot fdopen %s for %s", _PATH_SCOREFILE, human);
+	}
+	setegid(gid);
+
+	/*
+	 * Grab a lock.
+	 */
+	if (flock(sd, lck))
+		warn("warning: score file %s cannot be locked",
+		    _PATH_SCOREFILE);
 
 	nscores = fread(scores, sizeof(scores[0]), MAXHISCORES, sf);
-	if (ferror(sf))
-		err(1, "error reading %s", scorepath);
-	for (i = 0; i < nscores; i++)
-		if (scores[i].hs_level < MINLEVEL ||
-		    scores[i].hs_level > MAXLEVEL)
-			errx(1, "scorefile %s corrupt", scorepath);
+	if (ferror(sf)) {
+		err(1, "error reading %s", _PATH_SCOREFILE);
+	}
 
 	if (fpp)
 		*fpp = sf;
@@ -132,7 +146,8 @@ getscores(FILE **fpp)
 }
 
 void
-savescore(int level)
+savescore(level)
+	int level;
 {
 	struct highscore *sp;
 	int i;
@@ -170,7 +185,7 @@ savescore(int level)
 		break;
 	}
 	if (i >= nscores) {
-		strlcpy(sp->hs_name, me, sizeof sp->hs_name);
+		strcpy(sp->hs_name, me);
 		sp->hs_level = level;
 		sp->hs_score = score;
 		sp->hs_time = now;
@@ -183,12 +198,11 @@ savescore(int level)
 		 * Sort & clean the scores, then rewrite.
 		 */
 		nscores = checkscores(scores, nscores);
-		if (fseek(sf, 0L, SEEK_SET) == -1)
-			err(1, "fseek");
-		if (fwrite(scores, sizeof(*sp), nscores, sf) != nscores ||
+		rewind(sf);
+		if (fwrite(scores, sizeof(*sp), nscores, sf) != (size_t)nscores ||
 		    fflush(sf) == EOF)
-			warnx("error writing scorefile: %s\n\t-- %s",
-			    strerror(errno),
+			warnx("error writing %s: %s -- %s",
+			    _PATH_SCOREFILE, strerror(errno),
 			    "high scores may be damaged");
 	}
 	(void)fclose(sf);	/* releases lock */
@@ -199,21 +213,28 @@ savescore(int level)
  * The result is always trimmed to fit in a score.
  */
 static char *
-thisuser(void)
+thisuser()
 {
 	const char *p;
+	struct passwd *pw;
+	size_t l;
 	static char u[sizeof(scores[0].hs_name)];
 
 	if (u[0])
 		return (u);
-	p = getenv("LOGNAME");
-	if (p == NULL || *p == '\0')
-		p = getenv("USER");
-	if (p == NULL || *p == '\0')
-		p = getlogin();
-	if (p == NULL || *p == '\0')
-		p = "  ???";
-	strlcpy(u, p, sizeof(u));
+	p = getlogin();
+	if (p == NULL || *p == '\0') {
+		pw = getpwuid(getuid());
+		if (pw != NULL)
+			p = pw->pw_name;
+		else
+			p = "  ???";
+	}
+	l = strlen(p);
+	if (l >= sizeof(u))
+		l = sizeof(u) - 1;
+	memcpy(u, p, l);
+	u[l] = '\0';
 	return (u);
 }
 
@@ -224,7 +245,8 @@ thisuser(void)
  * listed first in the highscore file.
  */
 static int
-cmpscores(const void *x, const void *y)
+cmpscores(x, y)
+	const void *x, *y;
 {
 	const struct highscore *a, *b;
 	long l;
@@ -253,10 +275,12 @@ cmpscores(const void *x, const void *y)
  * Caveat:  the highest score on each level is always kept.
  */
 static int
-checkscores(struct highscore *hs, int num)
+checkscores(hs, num)
+	struct highscore *hs;
+	int num;
 {
 	struct highscore *sp;
-	int i, j, k, nrnames;
+	int i, j, k, numnames;
 	int levelfound[NLEVELS];
 	struct peruser {
 		char *name;
@@ -273,21 +297,21 @@ checkscores(struct highscore *hs, int num)
 	qsort((void *)hs, nscores, sizeof(*hs), cmpscores);
 	for (i = MINLEVEL; i < NLEVELS; i++)
 		levelfound[i] = 0;
-	nrnames = 0;
+	numnames = 0;
 	for (i = 0, sp = hs; i < num;) {
 		/*
 		 * This is O(n^2), but do you think we care?
 		 */
-		for (j = 0, pu = count; j < nrnames; j++, pu++)
+		for (j = 0, pu = count; j < numnames; j++, pu++)
 			if (strcmp(sp->hs_name, pu->name) == 0)
 				break;
-		if (j == nrnames) {
+		if (j == numnames) {
 			/*
 			 * Add new user, set per-user count to 1.
 			 */
 			pu->name = sp->hs_name;
 			pu->times = 1;
-			nrnames++;
+			numnames++;
 		} else {
 			/*
 			 * Two ways to keep this score:
@@ -296,6 +320,7 @@ checkscores(struct highscore *hs, int num)
 			 * - High score on this level.
 			 */
 			if ((pu->times < MAXSCORES &&
+			     getpwnam(sp->hs_name) != NULL &&
 			     sp->hs_time + EXPIRATION >= now) ||
 			    levelfound[sp->hs_level] == 0)
 				pu->times++;
@@ -324,7 +349,8 @@ checkscores(struct highscore *hs, int num)
  *   before it can be shown anyway.
  */
 void
-showscores(int level)
+showscores(level)
+	int level;
 {
 	struct highscore *sp;
 	int i, n, c;
@@ -333,7 +359,7 @@ showscores(int level)
 
 	if (!gotscores)
 		getscores((FILE **)NULL);
-	(void)printf("\n\t\t    Tetris High Scores\n");
+	(void)printf("\n\t\t\t    Tetris High Scores\n");
 
 	/*
 	 * If level == 0, the person has not played a game but just asked for
@@ -360,7 +386,7 @@ showscores(int level)
 	 * Page each screenful of scores.
 	 */
 	for (i = 0, sp = scores; i < nscores; sp += n) {
-		n = 20;
+		n = 40;
 		if (i + n > nscores)
 			n = nscores - i;
 		printem(level, i + 1, sp, n, me);
@@ -373,52 +399,68 @@ showscores(int level)
 			(void)printf("\n");
 		}
 	}
-
-	if (nscores == 0)
-		printf("\t\t\t      - none to date.\n");
 }
 
 static void
-printem(int level, int offset, struct highscore *hs, int n, const char *me)
+printem(level, offset, hs, n, me)
+	int level, offset;
+	struct highscore *hs;
+	int n;
+	const char *me;
 {
 	struct highscore *sp;
-	int row, highlight, i;
+	int nrows, row, col, item, i, highlight;
 	char buf[100];
-#define	TITLE "Rank  Score   Name                          (points/level)"
-#define	TITL2 "=========================================================="
+#define	TITLE "Rank  Score   Name     (points/level)"
 
-	printf("%s\n%s\n", TITLE, TITL2);
+	/*
+	 * This makes a nice two-column sort with headers, but it's a bit
+	 * convoluted...
+	 */
+	printf("%s   %s\n", TITLE, n > 1 ? TITLE : "");
 
 	highlight = 0;
+	nrows = (n + 1) / 2;
 
-	for (row = 0; row < n; row++) {
-		sp = &hs[row];
-		(void)snprintf(buf, sizeof(buf),
-		    "%3d%c %6d  %-31s (%6d on %d)\n",
-		    row + offset, sp->hs_time ? '*' : ' ',
-		    sp->hs_score * sp->hs_level,
-		    sp->hs_name, sp->hs_score, sp->hs_level);
-		/* Print leaders every three lines */
-		if ((row + 1) % 3 == 0) {
-			for (i = 0; i < sizeof(buf); i++)
-				if (buf[i] == ' ')
-					buf[i] = '_';
-		}
-		/*
-		 * Highlight if appropriate.  This works because
-		 * we only get one score per level.
-		 */
-		if (me != NULL &&
-		    sp->hs_level == level &&
-		    sp->hs_score == score &&
-		    strcmp(sp->hs_name, me) == 0) {
-			putpad(SOstr);
-			highlight = 1;
-		}
-		(void)printf("%s", buf);
-		if (highlight) {
-			putpad(SEstr);
-			highlight = 0;
+	for (row = 0; row < nrows; row++) {
+		for (col = 0; col < 2; col++) {
+			item = col * nrows + row;
+			if (item >= n) {
+				/*
+				 * Can only occur on trailing columns.
+				 */
+				(void)putchar('\n');
+				continue;
+			}
+			sp = &hs[item];
+			(void)sprintf(buf,
+			    "%3d%c %6d  %-11s (%6d on %d)",
+			    item + offset, sp->hs_time ? '*' : ' ',
+			    sp->hs_score * sp->hs_level,
+			    sp->hs_name, sp->hs_score, sp->hs_level);
+			/*
+			 * Highlight if appropriate.  This works because
+			 * we only get one score per level.
+			 */
+			if (me != NULL &&
+			    sp->hs_level == level &&
+			    sp->hs_score == score &&
+			    strcmp(sp->hs_name, me) == 0) {
+				putpad(SOstr);
+				highlight = 1;
+			}
+			(void)printf("%s", buf);
+			if (highlight) {
+				putpad(SEstr);
+				highlight = 0;
+			}
+
+			/* fill in spaces so column 1 lines up */
+			if (col == 0)
+				for (i = 40 - strlen(buf); --i >= 0;)
+					(void)putchar(' ');
+			else /* col == 1 */
+				(void)putchar('\n');
 		}
 	}
 }

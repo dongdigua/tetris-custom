@@ -1,5 +1,4 @@
-/*	$OpenBSD: input.c,v 1.19 2017/08/13 02:12:16 tedu Exp $	*/
-/*    $NetBSD: input.c,v 1.3 1996/02/06 22:47:33 jtc Exp $    */
+/*	$NetBSD: input.c,v 1.9 2003/08/07 09:37:47 agc Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -39,76 +38,95 @@
  * Tetris input.
  */
 
+#include <sys/types.h>
 #include <sys/time.h>
+#include <sys/poll.h>
 
 #include <errno.h>
-#include <poll.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "input.h"
 #include "tetris.h"
 
-/* return true iff the given timespec is positive */
-#define	TS_POS(ts) \
-	((ts)->tv_sec > 0 || ((ts)->tv_sec == 0 && (ts)->tv_nsec > 0))
+/* return true iff the given timeval is positive */
+#define	TV_POS(tv) \
+	((tv)->tv_sec > 0 || ((tv)->tv_sec == 0 && (tv)->tv_usec > 0))
+
+/* subtract timeval `sub' from `res' */
+#define	TV_SUB(res, sub) \
+	(res)->tv_sec -= (sub)->tv_sec; \
+	(res)->tv_usec -= (sub)->tv_usec; \
+	if ((res)->tv_usec < 0) { \
+		(res)->tv_usec += 1000000; \
+		(res)->tv_sec--; \
+	}
 
 /*
- * Do a `read wait': poll for reading from stdin, with timeout *limit.
- * On return, subtract the time spent waiting from *limit.
+ * Do a `read wait': poll for reading from stdin, with timeout *tvp.
+ * On return, modify *tvp to reflect the amount of time spent waiting.
  * It will be positive only if input appeared before the time ran out;
  * otherwise it will be zero or perhaps negative.
  *
- * If limit is NULL, wait forever, but return if poll is interrupted.
+ * If tvp is nil, wait forever, but return if poll is interrupted.
  *
- * Return 0 => no input, 1 => can read() from stdin, -1 => interrupted
+ * Return 0 => no input, 1 => can read() from stdin
  */
 int
-rwait(struct timespec *limit)
+rwait(tvp)
+	struct timeval *tvp;
 {
-	struct timespec start, end, elapsed;
-	struct pollfd pfd[1];
+	struct pollfd set[1];
+	struct timeval starttv, endtv;
+	int timeout;
+#define	NILTZ ((struct timezone *)0)
 
-	pfd[0].fd = STDIN_FILENO;
-	pfd[0].events = POLLIN;
-
-	if (limit != NULL)
-		clock_gettime(CLOCK_MONOTONIC, &start);
+	if (tvp) {
+		(void) gettimeofday(&starttv, NILTZ);
+		endtv = *tvp;
+		timeout = tvp->tv_sec * 1000 + tvp->tv_usec / 1000;
+	} else
+		timeout = INFTIM;
 again:
-	switch (ppoll(pfd, 1, limit, NULL)) {
+	set[0].fd = STDIN_FILENO;
+	set[0].events = POLLIN;
+	switch (poll(set, 1, timeout)) {
+
 	case -1:
-		if (limit == NULL)
+		if (tvp == 0)
 			return (-1);
 		if (errno == EINTR)
 			goto again;
 		stop("poll failed, help");
+		/* NOTREACHED */
+
 	case 0:	/* timed out */
-		timespecclear(limit);
+		tvp->tv_sec = 0;
+		tvp->tv_usec = 0;
 		return (0);
 	}
-	if (limit != NULL) {
-		/* we have input, so subtract the elapsed time from *limit */
-		clock_gettime(CLOCK_MONOTONIC, &end);
-		timespecsub(&end, &start, &elapsed);
-		timespecsub(limit, &elapsed, limit);
+	if (tvp) {
+		/* since there is input, we may not have timed out */
+		(void) gettimeofday(&endtv, NILTZ);
+		TV_SUB(&endtv, &starttv);
+		TV_SUB(tvp, &endtv);	/* adjust *tvp by elapsed time */
 	}
 	return (1);
 }
 
 /*
- * `sleep' for the current turn time and eat any
- * input that becomes available.
+ * `sleep' for the current turn time.
+ * Eat any input that might be available.
  */
 void
-tsleep(void)
+tsleep()
 {
-	struct timespec ts;
+	struct timeval tv;
 	char c;
 
-	ts.tv_sec = 0;
-	ts.tv_nsec = fallrate;
-	while (TS_POS(&ts))
-		if (rwait(&ts) && read(STDIN_FILENO, &c, 1) != 1)
+	tv.tv_sec = 0;
+	tv.tv_usec = fallrate;
+	while (TV_POS(&tv))
+		if (rwait(&tv) && read(0, &c, 1) != 1)
 			break;
 }
 
@@ -116,9 +134,9 @@ tsleep(void)
  * getchar with timeout.
  */
 int
-tgetchar(void)
+tgetchar()
 {
-	static struct timespec timeleft;
+	static struct timeval timeleft;
 	char c;
 
 	/*
@@ -130,14 +148,14 @@ tgetchar(void)
 	 *
 	 * Most of the hard work is done by rwait().
 	 */
-	if (!TS_POS(&timeleft)) {
+	if (!TV_POS(&timeleft)) {
 		faster();	/* go faster */
 		timeleft.tv_sec = 0;
-		timeleft.tv_nsec = fallrate;
+		timeleft.tv_usec = fallrate;
 	}
 	if (!rwait(&timeleft))
 		return (-1);
-	if (read(STDIN_FILENO, &c, 1) != 1)
+	if (read(0, &c, 1) != 1)
 		stop("end of file, help");
 	return ((int)(unsigned char)c);
 }

@@ -1,5 +1,4 @@
-/*	$OpenBSD: tetris.c,v 1.35 2021/07/12 15:09:18 beck Exp $	*/
-/*	$NetBSD: tetris.c,v 1.2 1995/04/22 07:42:47 cgd Exp $	*/
+/*	$NetBSD: tetris.c,v 1.17 2004/01/27 20:30:30 jsm Exp $	*/
 
 /*-
  * Copyright (c) 1992, 1993
@@ -35,13 +34,20 @@
  *	@(#)tetris.c	8.1 (Berkeley) 5/31/93
  */
 
+#include <sys/cdefs.h>
+#ifndef lint
+__COPYRIGHT("@(#) Copyright (c) 1992, 1993\n\
+	The Regents of the University of California.  All rights reserved.\n");
+#endif /* not lint */
+
 /*
  * Tetris (or however it is spelled).
  */
 
+#include <sys/time.h>
+
 #include <err.h>
-#include <errno.h>
-#include <limits.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,23 +59,26 @@
 #include "screen.h"
 #include "tetris.h"
 
-#define NUMKEYS 7
+cell	board[B_SIZE];		/* 1 => occupied, 0 => empty */
 
-cell	board[B_SIZE];
-int	Rows, Cols;
+int	Rows, Cols;		/* current screen size */
+
 const struct shape *curshape;
 const struct shape *nextshape;
-long	fallrate;
-int	score;
-char	key_msg[100];
-char	scorepath[PATH_MAX];
-int	showpreview, classic;
 
-static void		 elide(void);
-void			 onintr(int);
-const struct shape	*randshape(void);
-static void		 setup_board(void);
-__dead void		 usage(void);
+long	fallrate;		/* less than 1 million; smaller => faster */
+
+int	score;			/* the obvious thing */
+gid_t	gid, egid;
+
+char	key_msg[100];
+int	showpreview;
+
+static	void	elide(void);
+static	void	setup_board(void);
+	int	main(int, char **);
+	void	onintr(int) __attribute__((__noreturn__));
+	void	usage(void) __attribute__((__noreturn__));
 
 /*
  * Set up the initial board.  The bottom display row is completely set,
@@ -77,7 +86,7 @@ __dead void		 usage(void);
  * right edges are set.
  */
 static void
-setup_board(void)
+setup_board()
 {
 	int i;
 	cell *p;
@@ -91,9 +100,8 @@ setup_board(void)
  * Elide any full active rows.
  */
 static void
-elide(void)
+elide()
 {
-	int rows = 0;
 	int i, j, base;
 	cell *p;
 
@@ -103,103 +111,62 @@ elide(void)
 		for (j = B_COLS - 2; *p++ != 0;) {
 			if (--j <= 0) {
 				/* this row is to be elided */
-				rows++;
 				memset(&board[base], 0, B_COLS - 2);
 				scr_update();
 				tsleep();
 				while (--base != 0)
 					board[base + B_COLS] = board[base];
-				memset(&board[1], 0, B_COLS - 2);
 				scr_update();
 				tsleep();
 				break;
 			}
 		}
 	}
-	switch (rows) {
-	case 1:
-		score += 10;
-		break;
-	case 2:
-		score += 30;
-		break;
-	case 3:
-		score += 70;
-		break;
-	case 4:
-		score += 150;
-		break;
-	default:
-		break;
-	}
-}
-
-const struct shape *
-randshape(void)
-{
-	const struct shape *tmp;
-	int i, j;
-
-	tmp = &shapes[arc4random_uniform(7)];
-	j = arc4random_uniform(4);
-	for (i = 0; i < j; i++)
-		tmp = &shapes[classic? tmp->rotc : tmp->rot];
-	return (tmp);
 }
 
 int
-main(int argc, char *argv[])
+main(argc, argv)
+	int argc;
+	char *argv[];
 {
-	int pos, c, pos_r;
-	char *keys;
-	int level = 2, ret;
-	char key_write[NUMKEYS][10];
-	char *home;
-	const char *errstr;
+	int pos, c;
+	const char *keys;
+	int level = 2;
+	char key_write[6][10];
 	int ch, i, j;
+	int fd;
 
-	home = getenv("HOME");
-	if (home == NULL || *home == '\0')
-		err(1, "getenv");
+	gid = getgid();
+	egid = getegid();
+	setegid(gid);
 
-	ret = snprintf(scorepath, sizeof(scorepath), "%s/%s", home,
-	    ".tetris.scores");
-	if (ret < 0 || ret >= PATH_MAX)
-		errc(1, ENAMETOOLONG, "%s/%s", home, ".tetris.scores");
+	fd = open("/dev/null", O_RDONLY);
+	if (fd < 3)
+		exit(1);
+	close(fd);
 
-	if (pledge("stdio rpath wpath cpath tty unveil", NULL) == -1)
-		err(1, "pledge");
+	keys = "jkl pq";
 
-	keys = "hjkl pq";
-
-	classic = showpreview = 0;
-	while ((ch = getopt(argc, argv, "ck:l:ps")) != -1)
+	while ((ch = getopt(argc, argv, "k:l:ps")) != -1)
 		switch(ch) {
-		case 'c':
-			/*
-			 * this means:
-			 *	- rotate the other way;
-			 *	- no reverse video.
-			 */
-			classic = 1;
-			break;
 		case 'k':
-			if (strlen(keys = optarg) != NUMKEYS)
+			if (strlen(keys = optarg) != 6)
 				usage();
 			break;
 		case 'l':
-			level = (int)strtonum(optarg, MINLEVEL, MAXLEVEL,
-			    &errstr);
-			if (errstr)
+			level = atoi(optarg);
+			if (level < MINLEVEL || level > MAXLEVEL) {
 				errx(1, "level must be from %d to %d",
-				    MINLEVEL, MAXLEVEL);
+				     MINLEVEL, MAXLEVEL);
+			}
 			break;
 		case 'p':
 			showpreview = 1;
 			break;
 		case 's':
 			showscores(0);
-			return 0;
+			exit(0);
+		case '?':
 		default:
 			usage();
 		}
@@ -210,39 +177,32 @@ main(int argc, char *argv[])
 	if (argc)
 		usage();
 
-	fallrate = 1000000000L / level;
+	fallrate = 1000000 / level;
 
-	for (i = 0; i < NUMKEYS; i++) {
-		for (j = i+1; j < NUMKEYS; j++) {
-			if (keys[i] == keys[j])
+	for (i = 0; i <= 5; i++) {
+		for (j = i+1; j <= 5; j++) {
+			if (keys[i] == keys[j]) {
 				errx(1, "duplicate command keys specified.");
+			}
 		}
 		if (keys[i] == ' ')
-			strlcpy(key_write[i], "<space>", sizeof key_write[i]);
+			strcpy(key_write[i], "<space>");
 		else {
 			key_write[i][0] = keys[i];
 			key_write[i][1] = '\0';
 		}
 	}
 
-#if !SMALL
-	snprintf(key_msg, sizeof key_msg,
-"%s - left   %s - ccw  %s - cw   %s - right   %s - drop   %s - pause   %s - quit",
+	sprintf(key_msg,
+"%s - left   %s - rotate   %s - right   %s - drop   %s - pause   %s - quit",
 		key_write[0], key_write[1], key_write[2], key_write[3],
-		key_write[4], key_write[5], key_write[6]);
-#endif
+		key_write[4], key_write[5]);
 
 	(void)signal(SIGINT, onintr);
 	scr_init();
-
-	if (unveil(scorepath, "rwc") == -1)
-		err(1, "unveil %s", scorepath);
-
-	if (pledge("stdio rpath wpath cpath tty", NULL) == -1)
-		err(1, "pledge");
-
 	setup_board();
 
+	srandom(getpid());
 	scr_set();
 
 	pos = A_FIRST*B_COLS + (B_COLS/2)-1;
@@ -252,20 +212,9 @@ main(int argc, char *argv[])
 	scr_msg(key_msg, 1);
 
 	for (;;) {
-		pos_r = pos;
-
-		while (fits_in(curshape, pos_r + B_COLS)) {
-			/* need to place ghost brick first */
-			pos_r += B_COLS;
-		}
-		place(curshape, pos_r, 2);
 		place(curshape, pos, 1);
-
 		scr_update();
-
-		place(curshape, pos_r, 0);
 		place(curshape, pos, 0);
-
 		c = tgetchar();
 		if (c < 0) {
 			/*
@@ -299,11 +248,11 @@ main(int argc, char *argv[])
 		/*
 		 * Handle command keys.
 		 */
-		if (c == keys[6]) {
+		if (c == keys[5]) {
 			/* quit */
 			break;
 		}
-		if (c == keys[5]) {
+		if (c == keys[4]) {
 			static char msg[] =
 			    "paused - press RETURN to continue";
 
@@ -313,7 +262,7 @@ main(int argc, char *argv[])
 				scr_msg(key_msg, 0);
 				scr_msg(msg, 1);
 				(void) fflush(stdout);
-			} while (rwait(NULL) == -1);
+			} while (rwait((struct timeval *)NULL) == -1);
 			scr_msg(msg, 0);
 			scr_msg(key_msg, 1);
 			place(curshape, pos, 0);
@@ -326,7 +275,7 @@ main(int argc, char *argv[])
 			continue;
 		}
 		if (c == keys[1]) {
-			/* turn ccw */
+			/* turn */
 			const struct shape *new = &shapes[curshape->rot];
 
 			if (fits_in(new, pos))
@@ -334,20 +283,12 @@ main(int argc, char *argv[])
 			continue;
 		}
 		if (c == keys[2]) {
-			/* turn cw */
-			const struct shape *new = &shapes[curshape->rotc];
-
-			if (fits_in(new, pos))
-				curshape = new;
-			continue;
-		}
-		if (c == keys[3]) {
 			/* move right */
 			if (fits_in(curshape, pos + 1))
 				pos++;
 			continue;
 		}
-		if (c == keys[4]) {
+		if (c == keys[3]) {
 			/* move to bottom */
 			while (fits_in(curshape, pos + B_COLS)) {
 				pos += B_COLS;
@@ -364,15 +305,8 @@ main(int argc, char *argv[])
 	scr_clear();
 	scr_end();
 
-	if (showpreview == 0)
-		(void)printf("Your score:  %d point%s  x  level %d  =  %d\n",
-		    score, score == 1 ? "" : "s", level, score * level);
-	else {
-		(void)printf("Your score:  %d point%s x level %d x preview penalty %0.3f = %d\n",
-		    score, score == 1 ? "" : "s", level, (double)PRE_PENALTY,
-		    (int)(score * level * PRE_PENALTY));
-		score = score * PRE_PENALTY;
-	}
+	(void)printf("Your score:  %d point%s  x  level %d  =  %d\n",
+	    score, score == 1 ? "" : "s", level, score * level);
 	savescore(level);
 
 	printf("\nHit RETURN to see high scores, ^C to skip.\n");
@@ -383,21 +317,21 @@ main(int argc, char *argv[])
 
 	showscores(level);
 
-	return 0;
+	exit(0);
 }
 
 void
-onintr(int signo)
+onintr(signo)
+	int signo __attribute__((__unused__));
 {
-	scr_clear();		/* XXX signal race */
-	scr_end();		/* XXX signal race */
-	_exit(0);
+	scr_clear();
+	scr_end();
+	exit(0);
 }
 
 void
-usage(void)
+usage()
 {
-	(void)fprintf(stderr, "usage: %s [-cps] [-k keys] "
-	    "[-l level]\n", getprogname());
+	(void)fprintf(stderr, "usage: tetris-bsd [-ps] [-k keys] [-l level]\n");
 	exit(1);
 }
